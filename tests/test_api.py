@@ -1,0 +1,217 @@
+"""In-process API tests with an explicit test double, not real Firestore."""
+import copy
+import os
+import unittest
+from datetime import date
+from unittest.mock import Mock, patch
+
+from fastapi.testclient import TestClient
+from google.api_core.exceptions import AlreadyExists, NotFound, ServiceUnavailable, ResourceExhausted
+
+from app.config import Settings
+from app.errors import RecordConflict, RecordNotFound, StoreUnavailable, TooManyRecords
+from app.main import create_app
+from app.repositories.firestore import FirestoreRepository, unavailable
+
+
+class TestStore:
+    def __init__(self):
+        self.rows = {}
+        self.analysis_cache = None
+        self.revision = 0
+
+    def create(self, key, data):
+        if key in self.rows:
+            raise RecordConflict()
+        self.rows[key] = {**copy.deepcopy(data), 'id': key}
+        return self.get(key)
+
+    def get(self, key):
+        if key not in self.rows:
+            raise RecordNotFound()
+        return copy.deepcopy(self.rows[key])
+
+    def update(self, key, changes):
+        self.get(key)
+        self.rows[key].update(changes)
+        return self.get(key)
+
+    def delete(self, key):
+        self.get(key)
+        del self.rows[key]
+
+    def list_page(self, limit, cursor=None, item_name=None):
+        rows = [self.get(key) for key in sorted(self.rows) if (not cursor or key > cursor)
+                and (not item_name or self.rows[key]['item_name'] == item_name)]
+        more = len(rows) > limit
+        return {'items': rows[:limit], 'has_more': more,
+                'next_cursor': rows[limit - 1]['id'] if more else None}
+
+    def analysis_records(self, first_month, last_month, max_records):
+        rows = [self.get(key) for key in sorted(self.rows) if first_month <= self.rows[key]['year_month'] <= last_month]
+        if len(rows) > max_records:
+            raise TooManyRecords()
+        return rows
+
+    def probe(self):
+        return None
+
+    def mark_analysis_stale(self):
+        self.revision += 1
+
+    def analysis_revision(self):
+        return self.revision
+
+    def read_analysis_cache(self, revision, start_year, end_year, min_years):
+        if not self.analysis_cache:
+            return None
+        saved_revision, saved_start, saved_end, saved_min, data = self.analysis_cache
+        return copy.deepcopy(data) if (revision, start_year, end_year, min_years) == (saved_revision, saved_start, saved_end, saved_min) else None
+
+    def write_analysis_cache(self, revision, start_year, end_year, min_years, data):
+        self.analysis_cache = (revision, start_year, end_year, min_years, copy.deepcopy(data))
+
+
+def price(period='2024-11', **changes):
+    return {'year_month': period, 'item_name': '감자', 'variety_name': '수미', 'grade_name': '상품',
+            'quantity': 1, 'unit': 'kg', 'average_price': 80, **changes}
+
+
+class PriceApiTests(unittest.TestCase):
+    def setUp(self):
+        self.store = TestStore()
+        self.client = TestClient(create_app(Settings(admin_api_key='test-key', analysis_start_year=2023,
+                                                      analysis_end_year=2024, analysis_min_years=2), self.store))
+        self.headers = {'X-Admin-Key': 'test-key'}
+
+    def tearDown(self):
+        self.client.close()
+
+    def add(self, body):
+        response = self.client.post('/api/data', json=body, headers=self.headers)
+        self.assertEqual(response.status_code, 201, response.text)
+        return response.json()
+
+    def test_full_crud_and_duplicate_protection(self):
+        created = self.add(price())
+        key = created['id']
+        self.assertEqual(self.client.get('/api/data').json()['items'][0]['id'], key)
+        self.assertEqual(self.client.post('/api/data', json=price(), headers=self.headers).status_code, 409)
+        self.assertEqual(self.client.get('/api/data/'+key).status_code, 200)
+        edited = self.client.patch('/api/data/'+key, json={'average_price': 75, 'note': '가격 정정'}, headers=self.headers)
+        self.assertEqual(edited.status_code, 200)
+        self.assertEqual(edited.json()['id'], key)
+        self.assertEqual(edited.json()['average_price'], '75')
+        self.assertEqual(edited.json()['created_at'], created['created_at'])
+        self.assertEqual(self.client.delete('/api/data/'+key, headers=self.headers).status_code, 204)
+        self.assertEqual(self.client.get('/api/data/'+key).status_code, 404)
+        self.assertEqual(self.client.patch('/api/data/'+key, json={'average_price': 75}, headers=self.headers).status_code, 404)
+        self.assertEqual(self.client.delete('/api/data/'+key, headers=self.headers).status_code, 404)
+
+    def test_summary_reflects_creates_edits_and_deletes(self):
+        self.assertEqual(self.client.get('/api/data/summary?month=11').json()['candidate_count'], 0)
+        for year in [2023, 2024]:
+            self.add(price(f'{year}-10', average_price=100))
+            item = self.add(price(f'{year}-11'))
+        result = self.client.get('/api/data/summary?month=11').json()
+        self.assertEqual(result['candidates'][0]['median_change_pct'], -20)
+        self.assertEqual(result['metadata']['selected_record_count'], 4)
+        key = item['id']
+        self.client.patch('/api/data/'+key, json={'average_price': 120}, headers=self.headers)
+        self.assertEqual(self.client.get('/api/data/summary?month=11').json()['candidate_count'], 0)
+        self.client.delete('/api/data/'+key, headers=self.headers)
+        self.assertEqual(self.client.get('/api/data/summary?month=11').json()['metadata']['selected_record_count'], 3)
+
+    def test_equivalent_units_collide(self):
+        self.add(price(quantity=100, unit='g'))
+        response = self.client.post('/api/data', json=price(quantity='0.1'), headers=self.headers)
+        self.assertEqual(response.status_code, 409)
+
+    def test_invalid_input_and_unknown_fields_are_rejected(self):
+        for changes in [{'average_price': 0}, {'average_price': -1}, {'average_price': 'NaN'},
+                        {'year_month': '2024-13'}, {'year_month': date.today().strftime('%Y-%m')},
+                        {'variety_name': '<script>x</script>'}, {'item_name': '없는품목'},
+                        {'quantity': 0}, {'grade_name': '데이터 미집계'}, {'source': 'csv'}]:
+            response = self.client.post('/api/data', json=price(**changes), headers=self.headers)
+            self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(self.store.rows, {})
+
+    def test_write_authentication_and_pagination(self):
+        self.assertEqual(self.client.post('/api/data', json=price()).status_code, 401)
+        self.assertEqual(self.client.post('/api/data', json=price(), headers={'X-Admin-Key': 'wrong'}).status_code, 401)
+        for month in [9, 10, 11]:
+            self.add(price(f'2024-{month:02d}'))
+        first = self.client.get('/api/data?limit=2').json()
+        second = self.client.get('/api/data', params={'limit': 2, 'cursor': first['next_cursor']}).json()
+        self.assertTrue(first['has_more'])
+        self.assertFalse(second['has_more'])
+        self.assertEqual(len({r['id'] for r in first['items']+second['items']}), 3)
+        self.assertEqual(self.client.get('/api/data?limit=101').status_code, 422)
+
+    def test_cors_and_swagger(self):
+        response = self.client.options('/api/data', headers={'Origin': 'http://localhost:5173',
+            'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'Content-Type,X-Admin-Key'})
+        self.assertEqual(response.headers['access-control-allow-origin'], 'http://localhost:5173')
+        denied = self.client.options('/api/data', headers={'Origin': 'https://untrusted.example',
+            'Access-Control-Request-Method': 'POST'})
+        self.assertNotIn('access-control-allow-origin', denied.headers)
+        self.assertEqual(self.client.get('/docs').status_code, 200)
+        schema = self.client.get('/openapi.json').json()
+        self.assertIn('/api/data/summary', schema['paths'])
+        self.assertEqual(schema['components']['securitySchemes']['APIKeyHeader']['name'], 'X-Admin-Key')
+
+    def test_frontend_assets_and_secret_isolation(self):
+        response = self.client.get('/')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('제철한끼', response.text)
+        for asset in ['/app.js', '/styles.css', '/config.js', '/sample/seasonal_rankings.json']:
+            self.assertEqual(self.client.get(asset).status_code, 200)
+        self.assertEqual(self.client.get('/.env').status_code, 404)
+        self.assertEqual(self.client.get('/data/raw').status_code, 404)
+
+    def test_missing_firestore_does_not_fall_back_to_memory(self):
+        with TestClient(create_app(Settings())) as client:
+            self.assertEqual(client.get('/health').status_code, 200)
+            self.assertFalse(client.get('/health').json()['firestore_configured'])
+            self.assertEqual(client.get('/health/ready').status_code, 503)
+            self.assertEqual(client.get('/api/data').status_code, 503)
+            self.assertEqual(client.get('/api/data/summary').status_code, 503)
+
+
+class FirestoreAdapterTests(unittest.TestCase):
+    def test_quota_error_is_distinct_and_does_not_expose_sdk_details(self):
+        store = TestStore()
+        store.analysis_records = Mock(side_effect=unavailable('analysis query', ResourceExhausted('private diagnostic')))
+        with TestClient(create_app(Settings(), store)) as client:
+            response = client.get('/api/data/summary?month=11')
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()['code'], 'firestore_quota_exceeded')
+        self.assertNotIn('private diagnostic', response.text)
+
+    def setUp(self):
+        self.repo = object.__new__(FirestoreRepository)
+        self.repo.collection = Mock()
+
+    def test_create_translates_duplicate_and_connection_failures(self):
+        doc = self.repo.collection.document.return_value
+        doc.create.side_effect = AlreadyExists('duplicate')
+        with self.assertRaises(RecordConflict):
+            self.repo.create('x', {})
+        doc.create.side_effect = ServiceUnavailable('offline')
+        with self.assertRaises(StoreUnavailable):
+            self.repo.create('x', {})
+
+    def test_update_does_not_upsert_missing_record(self):
+        self.repo.collection.document.return_value.update.side_effect = NotFound('missing')
+        with self.assertRaises(RecordNotFound):
+            self.repo.update('x', {'average_price': '20'})
+
+    def test_empty_emulator_setting_uses_cloud_endpoint(self):
+        with patch.dict(os.environ, {'FIRESTORE_EMULATOR_HOST': ''}):
+            settings = Settings.from_env()
+            self.assertEqual(settings.firestore_emulator_host, '')
+            self.assertNotIn('FIRESTORE_EMULATOR_HOST', os.environ)
+
+
+if __name__ == '__main__':
+    unittest.main()

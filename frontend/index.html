@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>제철한끼 — 계절을 읽는 장바구니</title>
+  <meta name="description" content="과거 농산물 소매가격으로 살펴보는 월별 가격 하락 경향.">
+  <link rel="stylesheet" href="/styles.css"><script src="/config.js"></script><script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="제철한끼 홈"><span class="brand-mark">✳</span> 제철한끼<span class="brand-dot">.</span></a>
+    <p class="brand-caption">계절을 읽는 장바구니</p>
+    <nav aria-label="주 메뉴"><button class="nav-link active" data-view="explore"><span>▦</span> 재료 탐색</button><button class="nav-link" id="open-chat"><span>✳</span> 요리 챗봇</button><button class="nav-link" data-view="manage"><span>▤</span> 데이터 관리</button><button class="nav-link" id="method-link"><span>ⓘ</span> 분석 기준</button></nav>
+    <div class="side-note"><span class="tiny-label">SMALL CHOICES, GOOD MEALS</span><p>계절에 맞는 선택이<br>한 끼를 바꿔요.</p><div class="side-sprout">🌱</div><small>공공데이터로 알아보는<br>농산물의 계절적 가격 흐름</small></div>
+    <div class="side-bottom">농산물 소매가격 분석 프로젝트</div>
+  </aside>
+  <main>
+    <header class="topbar" hidden><span id="page-label">재료 탐색 <span class="crumb">/ 월별 하락 경향</span></span><span id="connection" class="connection"><i></i> 데이터 연결 중</span></header>
+    <div class="workspace" id="workspace">
+    <section id="explore-view">
+      <div class="month-panel"><div><span class="section-kicker">어느 달의 재료가 궁금하세요?</span><h2><span id="month-heading">11월</span>의 장바구니</h2></div><div class="month-picker" role="group" aria-label="분석 월 선택" id="months"></div></div>
+      <div class="sample-banner" id="sample-banner" hidden>저장된 분석 미리보기입니다. 현재 Firestore 조회 결과가 아닙니다. <button id="switch-live">실제 API 연결</button></div>
+      <div class="stats" id="stats"><div><span>분석에 사용한 가격 기록</span><strong id="record-count">—</strong><small>월별 소매가격</small></div><div><span>하락 경향이 있는 재료</span><strong id="candidate-count">—</strong><small id="candidate-label">선택한 월 기준</small></div><div><span>과거 데이터 분석 기간</span><strong id="period">—</strong><small>동일 조건의 가격끼리 비교</small></div></div>
+      <section class="results" aria-labelledby="results-title">
+        <div class="results-heading"><div><span class="section-kicker">계절의 흐름을 따라</span><h2 id="results-title">가격이 내려가는 재료 <span id="visible-count"></span></h2></div><button class="text-button" id="refresh">↻ 새로고침</button></div>
+        <div class="toolbar"><div class="filters" role="group" aria-label="품목 분류" id="filters"></div><div class="search-sort"><label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="재료 검색" aria-label="재료 검색"></label><select id="sort" aria-label="순위 정렬"><option value="drop">하락 폭순</option><option value="frequency">하락 빈도순</option><option value="name">이름순</option></select></div></div>
+        <div id="status" class="status" role="status" aria-live="polite"></div>
+        <div id="ranking-list" class="ranking-list" aria-live="polite"></div>
+        <p class="footnote">* 하락 폭은 과거 같은 월 전환의 변화율 중앙값입니다. 올해의 예상 하락률이나 현재 판매 가격을 뜻하지 않습니다.</p>
+      </section>
+      <section id="method" class="method"><span class="method-icon">↗</span><div><h3>이 순위는 어떻게 계산하나요?</h3><p>같은 품종·등급·판매 수량의 전월과 선택 월 가격을 비교합니다. 품목별로 각 해의 중앙값을 구한 뒤 여러 해의 흐름을 모았습니다. 비교 가능한 해가 5년 이상이고, 그중 60% 이상 하락한 재료를 보여줍니다.</p><details><summary>데이터 범위와 한계 자세히 보기</summary><p id="limitations">최신 확보 자료인 2024년까지의 과거 경향을 분석합니다. 2025년 자료 누락과 2026년 자료의 연월 확인 문제로 최신 가격은 포함하지 않았습니다. 날씨·공급량·수요는 반영하지 않았으며 수입 농산물도 포함됩니다.</p></details></div></section>
+    </section>
+  <section id="chat-dialog" hidden class="chat-dialog" aria-labelledby="chat-title"><div class="chat-header"><div class="chat-avatar">✳</div><div><h2 id="chat-title">제철 요리 도우미</h2><span id="chat-state">연결 확인 중</span></div><button class="chat-header-action" id="new-chat" title="새 대화">+</button><button class="chat-header-action" id="show-conversations" title="저장된 대화">☰</button><button class="dialog-close chat-exit" aria-label="채팅 닫기" data-close="chat-dialog">×</button></div>
+    <div class="chat-body"><section id="conversation-list" class="conversation-list" hidden><div class="conversation-list-title"><strong>저장된 대화</strong><button id="close-conversations">닫기</button></div><div id="conversations" class="conversations"></div></section><div id="chat-messages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions text"></div>
+      <div id="chat-suggestions" class="chat-suggestions"><button>11월 재료로 따뜻한 국 추천해줘</button><button>배추로 간단한 한 끼 알려줘</button><button>장보기 재료 적게 쓰는 요리 추천해줘</button></div><div id="chat-notice" class="chat-notice"></div>
+    </div><form id="chat-form" class="chat-form"><label class="sr-only" for="chat-input">요리 질문</label><textarea id="chat-input" rows="1" maxlength="1000" placeholder="제철 재료로 어떤 요리를 할까요?" required></textarea><button id="chat-send" type="submit" aria-label="메시지 보내기">↑</button><small>선택한 월의 과거 가격 경향을 참고합니다. 실제 현재 가격은 알 수 없어요.</small></form></section>
+    </div>
+    <section id="manage-view" hidden>
+      <div class="manage-heading"><div><span class="eyebrow">PRICE RECORDS</span><h1>데이터 관리</h1><p>월별 가격을 기록하고, 잘못된 가격을 정정하세요.</p></div><button class="primary" id="add-price">＋ 가격 추가</button></div>
+      <div class="admin-panel"><label for="admin-key">관리자 인증</label><input id="admin-key" type="password" autocomplete="off" placeholder="관리자 키 입력"><small>이 탭에서만 사용하며 브라우저에 저장하지 않습니다.</small></div>
+      <div class="toolbar"><label class="search"><input id="manage-search" placeholder="품목명 정확히 입력" aria-label="관리 목록 품목 검색"></label><button class="secondary" id="manage-load">조회</button><span class="muted">월별 가격 · 문서 순서</span></div>
+      <p id="manage-status" role="status" aria-live="polite"></p><div id="records" class="records"></div><button class="secondary more" id="load-more" hidden>더 불러오기</button>
+    </section>
+    <footer><span class="footer-brand">✳ 제철한끼</span><span>데이터 출처 · 한국농수산식품유통공사(aT)<br>과거 가격의 계절적 경향을 제공하는 학습용 서비스</span></footer>
+  </main>
+
+  <dialog id="detail-dialog"><button class="dialog-close" aria-label="닫기" data-close="detail-dialog">×</button><span class="section-kicker">가격 흐름 살펴보기</span><h2 id="detail-title"></h2><div id="detail-body"></div><button class="primary" data-close="detail-dialog">확인했어요</button></dialog>
+  <dialog id="price-dialog"><button class="dialog-close" aria-label="닫기" data-close="price-dialog">×</button><h2 id="form-title">월별 가격 추가</h2><form id="price-form"><fieldset id="identity-fields"><div class="form-grid"><label>연월<input name="year_month" type="month" required></label><label>품목<select name="item_name" required id="item-select"></select></label><label>품종<input name="variety_name" maxlength="100" required placeholder="예: 가을"></label><label>등급<select name="grade_name"><option>상품</option><option>중품</option><option>L과</option><option>M과</option><option>S과</option><option>大</option><option>中</option><option>小</option></select></label><label>판매 수량<input name="quantity" type="number" step="0.000001" min="0.000001" value="1" required></label><label>단위<select name="unit"><option>kg</option><option>g</option><option>포기</option><option>개</option><option>봉</option><option>묶음</option><option>L</option><option>ml</option><option>장</option><option>속</option></select></label></div></fieldset><label>평균 가격 (원)<input name="average_price" type="number" min="0.0001" max="10000000" step="0.0001" required></label><label>메모<textarea name="note" rows="2" maxlength="300"></textarea></label><p id="form-error" role="alert"></p><button class="primary" id="save-price" type="submit">저장하기</button></form></dialog>
+</body>
+</html>
