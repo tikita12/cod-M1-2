@@ -112,3 +112,56 @@ class ChatTests(unittest.TestCase):
         service.invalidate_analysis()
         service.summary(11, 8)
         self.assertEqual(self.repo.analysis_records.call_count, 2)
+
+    def test_http_error_logs_only_diagnostic_fields(self):
+        with patch('app.services.chat.httpx.Client') as provider:
+            provider.return_value.__enter__.return_value.post.return_value = httpx.Response(
+                429, json={'error': {'message': 'Quota exceeded', 'type': 'quota_error',
+                                    'code': 'insufficient_quota', 'request': 'PRIVATE_EXTRA'},
+                           'messages': 'PRIVATE_BODY'})
+            with self.assertLogs('app.services.chat', level='WARNING') as logs:
+                with self.assertRaises(AIUnavailable):
+                    self.service.answer(self.payload)
+        output = '\n'.join(logs.output)
+        for expected in ['HTTP 429', 'Quota exceeded', 'quota_error', 'insufficient_quota']:
+            self.assertIn(expected, output)
+        for private in ['PRIVATE_EXTRA', 'PRIVATE_BODY', self.payload.message, 'Authorization']:
+            self.assertNotIn(private, output)
+        self.repo.append_conversation.assert_not_called()
+
+    def test_http_error_redacts_echoed_credentials_and_conversation(self):
+        self.payload.conversation_id = '22222222-2222-4222-8222-222222222222'
+        self.repo.get_conversation.return_value = {'messages': [
+            {'role': 'user', 'content': 'Private earlier question'},
+            {'role': 'assistant', 'content': 'Private earlier answer'}]}
+        self.service.settings = Settings(openai_api_key='secret-api-key')
+        with patch('app.services.chat.httpx.Client') as provider:
+            provider.return_value.__enter__.return_value.post.return_value = httpx.Response(
+                401, json={'error': {
+                    'message': 'secret-api-key ' + self.payload.message + '\nPrivate earlier question',
+                    'type': 'Private earlier answer',
+                    'code': 'Authorization: Bearer secret-api-key'}})
+            with self.assertLogs('app.services.chat', level='WARNING') as logs:
+                with self.assertRaises(AIUnavailable):
+                    self.service.answer(self.payload)
+        output = '\n'.join(logs.output)
+        self.assertIn('[REDACTED]', output)
+        for private in ['secret-api-key', self.payload.message, 'Private earlier question',
+                        'Private earlier answer', 'Authorization', 'Bearer']:
+            self.assertNotIn(private, output)
+        self.repo.append_conversation.assert_not_called()
+
+    def test_http_error_with_non_json_or_unexpected_shape_keeps_status(self):
+        responses = [httpx.Response(502, text='PRIVATE_HTML'),
+                     *[httpx.Response(502, json=body) for body in
+                       [[], {}, {'error': None}, {'error': 'PRIVATE_TEXT'},
+                        {'error': {'message': {'private': 'PRIVATE_NESTED'}}}]]]
+        for response in responses:
+            with self.subTest(body=response.text), patch('app.services.chat.httpx.Client') as provider:
+                provider.return_value.__enter__.return_value.post.return_value = response
+                with self.assertLogs('app.services.chat', level='WARNING') as logs:
+                    with self.assertRaisesRegex(AIUnavailable, 'API 키와 모델 설정'):
+                        self.service.answer(self.payload)
+                self.assertIn('HTTP 502', logs.output[0])
+                self.assertNotIn('PRIVATE_', logs.output[0])
+        self.repo.append_conversation.assert_not_called()

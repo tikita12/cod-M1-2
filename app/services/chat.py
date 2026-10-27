@@ -1,6 +1,7 @@
 """Recipe chat with explicit price context and Firestore conversation history."""
 import logging
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -9,6 +10,40 @@ import httpx
 from app.errors import AIUnavailable
 
 log = logging.getLogger(__name__)
+
+
+def _error_log_fields(response, api_key, messages):
+    """Extract only diagnostic fields; never log raw responses or request data."""
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    error = body.get("error") if isinstance(body, dict) else None
+    error = error if isinstance(error, dict) else {}
+    sensitive = [api_key] + [message["content"] for message in messages]
+    # Also redact escaped echoes and individual lines of multiline messages.
+    redactions = set()
+    for value in sensitive:
+        if value:
+            for part in [value, *value.splitlines()]:
+                if part.strip():
+                    redactions.update((part, json.dumps(part, ensure_ascii=False)[1:-1],
+                                       json.dumps(part, ensure_ascii=True)[1:-1]))
+    fields = {}
+    for name in ("message", "type", "code"):
+        value = error.get(name)
+        if not isinstance(value, (str, int, float, bool)):
+            fields[name] = None
+            continue
+        value = str(value)
+        for private in sorted(redactions, key=len, reverse=True):
+            value = value.replace(private, "[REDACTED]")
+        value = re.sub(r"(?i)authorization[^\r\n]*", "[REDACTED]", value)
+        value = re.sub(r"(?i)\bBearer\s+\S+", "[REDACTED]", value)
+        value = re.sub(r"\bsk-[A-Za-z0-9_-]+", "[REDACTED]", value)
+        fields[name] = value[:1000]
+    # JSON escaping keeps untrusted error text from injecting log lines.
+    return json.dumps(fields, ensure_ascii=True)
 
 
 class ChatService:
@@ -76,7 +111,8 @@ class ChatService:
                     json={"model": self.settings.openai_model, "messages": messages,
                           "max_completion_tokens": 2400, "reasoning_effort": "low", "store": False})
             if response.is_error:
-                log.warning("OpenAI request failed with HTTP %s", response.status_code)
+                log.warning("OpenAI request failed with HTTP %s error=%s", response.status_code,
+                            _error_log_fields(response, self.settings.openai_api_key, messages))
                 raise AIUnavailable("AI 서비스 요청에 실패했습니다. API 키와 모델 설정을 확인하세요")
             result = response.json()
             choice = result["choices"][0]
