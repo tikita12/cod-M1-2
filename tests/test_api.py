@@ -2,17 +2,19 @@
 import copy
 import os
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 from google.api_core.exceptions import AlreadyExists, NotFound, ServiceUnavailable, ResourceExhausted
 from google.auth.credentials import AnonymousCredentials
 from google.cloud import firestore
+from google.api_core.datetime_helpers import DatetimeWithNanoseconds
 
 from app.config import Settings
 from app.errors import RecordConflict, RecordNotFound, StoreUnavailable, TooManyRecords
 from app.main import create_app
+from app.pagination import decode_price_cursor, encode_price_cursor
 from app.repositories.firestore import FirestoreRepository, unavailable
 
 
@@ -45,13 +47,13 @@ class TestStore:
     def list_page(self, limit, cursor=None, item_name=None):
         rows = sorted((self.get(key) for key in self.rows
                        if not item_name or self.rows[key]['item_name'] == item_name),
-                      key=lambda row: (row['year_month'], row['id']), reverse=True)
+                      key=lambda row: (row['year_month'], row['created_at'], row['id']), reverse=True)
         if cursor:
-            boundary = tuple(cursor.split(':', 1))
-            rows = [row for row in rows if (row['year_month'], row['id']) < boundary]
+            boundary = decode_price_cursor(cursor)
+            rows = [row for row in rows if (row['year_month'], row['created_at'], row['id']) < boundary]
         more = len(rows) > limit
         return {'items': rows[:limit], 'has_more': more,
-                'next_cursor': f"{rows[limit - 1]['year_month']}:{rows[limit - 1]['id']}" if more else None}
+                'next_cursor': encode_price_cursor(rows[limit - 1]) if more else None}
 
     def analysis_records(self, first_month, last_month, max_records):
         rows = [self.get(key) for key in sorted(self.rows) if first_month <= self.rows[key]['year_month'] <= last_month]
@@ -163,6 +165,11 @@ class PriceApiTests(unittest.TestCase):
                        ('2024-11', 1, '감자'), ('2024-12', 1, '감자'),
                        ('2024-12', 2, '감자'), ('2024-12', 3, '감자'),
                        ('2024-12', 1, '배추'), ('2023-01', 1, '감자')]]
+        # Include equal timestamps and deliberately disagree with ID order.
+        for row, day in zip(created, [1, 3, 2, 2, 4, 5]):
+            stamp = datetime(2026, 1, day, tzinfo=timezone.utc)
+            self.store.rows[row['id']]['created_at'] = stamp
+            row['created_at'] = stamp
         for item_name in [None, '감자', '배추', '없는품목']:
             with self.subTest(item_name=item_name):
                 params = {'limit': 2}
@@ -181,7 +188,7 @@ class PriceApiTests(unittest.TestCase):
                 else:
                     self.fail('Pagination did not terminate')
                 expected = sorted((r for r in created if not item_name or r['item_name'] == item_name),
-                                  key=lambda r: (r['year_month'], r['id']), reverse=True)
+                                  key=lambda r: (r['year_month'], r['created_at'], r['id']), reverse=True)
                 self.assertEqual([r['id'] for r in actual], [r['id'] for r in expected])
 
     def test_deleted_cursor_record_and_invalid_cursor(self):
@@ -191,7 +198,9 @@ class PriceApiTests(unittest.TestCase):
         self.client.delete('/api/data/' + first['items'][0]['id'], headers=self.headers)
         following = self.client.get('/api/data', params={'cursor': first['next_cursor']}).json()
         self.assertEqual([r['year_month'] for r in following['items']], ['2024-10', '2024-09'])
-        for cursor in ['a' * 64, '2024-13:' + 'a' * 64, '2024-11:bad']:
+        for cursor in ['a' * 64, '2024-13:' + 'a' * 64, '2024-11:bad',
+                       '2024-11|2026-02-30T00:00:00Z|' + 'a' * 64,
+                       '2024-11|not-a-timestamp|' + 'a' * 64]:
             self.assertEqual(self.client.get('/api/data', params={'cursor': cursor}).status_code, 422)
 
     def test_cors_and_swagger(self):
@@ -225,11 +234,12 @@ class PriceApiTests(unittest.TestCase):
 
 
 class FirestoreAdapterTests(unittest.TestCase):
-    def test_list_query_sorts_before_limit_and_uses_both_cursor_fields(self):
+    def test_list_query_sorts_before_limit_and_uses_all_cursor_fields(self):
         client = firestore.Client(project='offline-tests', credentials=AnonymousCredentials())
         self.repo.collection = client.collection('data')
         ids = ['c' * 64, 'b' * 64, 'a' * 64]
-        docs = [Mock(id=key, to_dict=Mock(return_value={'year_month': '2024-11'})) for key in ids]
+        stamp = DatetimeWithNanoseconds.from_rfc3339('2026-01-01T00:00:00.123456Z')
+        docs = [Mock(id=key, to_dict=Mock(return_value={'year_month': '2024-11', 'created_at': stamp})) for key in ids]
         queries = []
 
         def stream(query, **kwargs):
@@ -239,20 +249,22 @@ class FirestoreAdapterTests(unittest.TestCase):
         try:
             with patch.object(firestore.Query, 'stream', stream):
                 for item_name in [None, '감자']:
-                    result = self.repo.list_page(2, '2024-12:' + 'd' * 64, item_name)
+                    cursor = encode_price_cursor({'year_month': '2024-12', 'created_at': stamp, 'id': 'd' * 64})
+                    result = self.repo.list_page(2, cursor, item_name)
                     query = queries[-1]
                     self.assertEqual([(order.field.field_path, order.direction) for order in query.order_by],
-                                     [('year_month', 2), ('__name__', 2)])
+                                     [('year_month', 2), ('created_at', 2), ('__name__', 2)])
                     self.assertEqual(query.limit, 3)
                     self.assertEqual(query.start_at.values[0].string_value, '2024-12')
-                    self.assertTrue(query.start_at.values[1].reference_value.endswith('/data/' + 'd' * 64))
+                    self.assertEqual(query.start_at.values[1].timestamp_value.microsecond, 123456)
+                    self.assertTrue(query.start_at.values[2].reference_value.endswith('/data/' + 'd' * 64))
                     self.assertFalse(query.start_at.before)
                     if item_name:
                         self.assertEqual(query.where.field_filter.field.field_path, 'item_name')
                         self.assertEqual(query.where.field_filter.value.string_value, item_name)
                     self.assertEqual([row['id'] for row in result['items']], ids[:2])
                     self.assertTrue(result['has_more'])
-                    self.assertEqual(result['next_cursor'], '2024-11:' + ids[1])
+                    self.assertEqual(result['next_cursor'], '2024-11|2026-01-01T00:00:00.123456Z|' + ids[1])
         finally:
             client.close()
 

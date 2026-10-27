@@ -1,10 +1,11 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 
 from app.catalog import agricultural_categories
 from app.dependencies import price_service, repository, require_admin
+from app.pagination import decode_price_cursor
 from app.schemas import CatalogItem, PriceCreate, PricePage, PriceRecord, PriceUpdate, SummaryResponse, TrendResponse
 
 router = APIRouter(prefix="/api/data", tags=["가격 데이터"])
@@ -25,8 +26,13 @@ def summary(month: Annotated[int | None, Query(ge=1, le=12)] = None,
 
 @router.get("", response_model=PricePage, summary="가격 자료 연월 최신순 목록 조회")
 def list_prices(limit: Annotated[int, Query(ge=1, le=100)] = 30,
-                cursor: Annotated[str | None, Query(pattern=r"^[0-9]{4}-(0[1-9]|1[0-2]):[0-9a-f]{64}$")] = None,
+                cursor: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
                 item_name: Annotated[str | None, Query(max_length=60)] = None, store=Depends(repository)):
+    if cursor is not None:
+        try:
+            decode_price_cursor(cursor)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="잘못된 목록 커서입니다. 목록을 새로 조회하세요") from None
     return store.list_page(limit, cursor, item_name)
 
 

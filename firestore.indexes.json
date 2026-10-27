@@ -4,8 +4,18 @@
       "collectionGroup": "data",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "year_month", "order": "DESCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "data",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "item_name", "order": "ASCENDING" },
         { "fieldPath": "year_month", "order": "DESCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" },
         { "fieldPath": "__name__", "order": "DESCENDING" }
       ]
     }

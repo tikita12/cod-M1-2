@@ -64,28 +64,33 @@ Swagger UI의 Authorize에 `.env`의 `ADMIN_API_KEY`를 넣으면 추가·수정
 | GET | `/api/data/{id}` | 한 건 조회 |
 | PATCH | `/api/data/{id}` | 가격·메모 수정 |
 | DELETE | `/api/data/{id}` | 삭제 |
-
-목록은 등록일(`created_at`)이 아닌 가격 자료의 연월(`year_month`) 내림차순입니다.
-같은 연월에서는 문서 ID 내림차순으로 순서를 고정합니다. Firestore에서 검색 조건에
-맞는 전체 결과를 정렬한 뒤 `limit + 1`건만 읽어 페이지와 다음 페이지 유무를 결정합니다.
-`item_name`은 기존처럼 품목명 정확히 일치 검색입니다.
-
-다음 요청에는 응답의 `next_cursor`를 그대로 전달하고 같은 검색 조건을 유지합니다.
-커서는 `YYYY-MM:문서ID` 형식으로 두 정렬 기준을 모두 포함하므로 같은 연월이 여러
-페이지에 걸쳐 있어도 이어서 조회할 수 있습니다. 커서의 문서가 삭제되어도 추가 조회 없이
-그 위치 다음부터 읽습니다. 검색 조건을 바꾸면 커서를 초기화합니다. 이전 ID 전용 커서는
-지원하지 않으므로 배포 후 열려 있던 관리 화면은 새로고침해야 합니다.
-
-품목 검색과 최신순 정렬에는 `firestore.indexes.json`에 정의한 복합 인덱스가 필요합니다.
-Firebase 콘솔의 Firestore 인덱스에서 컬렉션 `data`, 범위 `Collection`, 필드
-`item_name` 오름차순·`year_month` 내림차순·`__name__` 내림차순으로 생성하고
-인덱스가 준비된 후 배포 환경의 검색을 확인합니다. 일반 목록은 `year_month` 내림차순
-단일 필드 인덱스를 사용합니다. 코드 배포만으로 복합 인덱스가 생성되지는 않습니다.
 | GET | `/api/data/summary?month=11` | 월별 하락 경향 요약 |
 | GET | `/api/chat/status` | AI API 키 설정 여부 |
 | POST | `/api/chat` | 분석 요약을 반영한 답변과 대화 저장 |
 | GET | `/api/conversations?owner_id=...` | 저장된 대화 목록 |
 | GET | `/api/conversations/{id}?owner_id=...` | 저장된 대화 불러오기 |
+
+목록은 가격 자료의 연월(`year_month`) 내림차순이며, 같은 연월에서는 등록 시각
+(`created_at`) 내림차순입니다. 두 값이 모두 같으면 문서 ID 내림차순으로 순서를 고정합니다. Firestore에서 검색 조건에
+맞는 전체 결과를 정렬한 뒤 `limit + 1`건만 읽어 페이지와 다음 페이지 유무를 결정합니다.
+`item_name`은 기존처럼 품목명 정확히 일치 검색입니다.
+
+다음 요청에는 응답의 `next_cursor`를 그대로 전달하고 같은 검색 조건을 유지합니다.
+커서는 `YYYY-MM|UTC등록시각|문서ID` 형식으로 세 정렬 기준을 모두 포함하며
+등록 시각의 마이크로초 정밀도도 보존합니다. 같은 연월이 여러
+페이지에 걸쳐 있어도 이어서 조회할 수 있습니다. 커서의 문서가 삭제되어도 추가 조회 없이
+그 위치 다음부터 읽습니다. 검색 조건을 바꾸면 커서를 초기화합니다. 이전 ID 전용 또는 연월·ID 커서는
+지원하지 않으므로 배포 후 열려 있던 관리 화면은 새로고침해야 합니다.
+
+일반 목록과 품목 검색 모두 `firestore.indexes.json`에 정의한 복합 인덱스가 필요합니다.
+Firebase 콘솔에서 컬렉션 `data`, 범위 `Collection`으로 다음 인덱스를 생성합니다.
+
+- 일반 목록: `year_month` 내림차순·`created_at` 내림차순·`__name__` 내림차순.
+- 품목 검색: `item_name` 오름차순 뒤에 일반 목록과 동일한 세 정렬 필드.
+
+인덱스가 준비된 후 배포 환경의 목록과 검색을 확인합니다. 코드 배포만으로 복합 인덱스가
+생성되지는 않습니다. 정렬 필드가 없는 문서는 Firestore 쿼리에 포함되지 않으므로 기존
+가격 문서에도 `year_month`와 Timestamp 형식의 `created_at`이 있어야 합니다.
 
 가격 추가 예시:
 
@@ -123,7 +128,7 @@ ID는 연월·품목·품종·등급·환산 판매 수량·단위의 SHA-256입
 
 문서에는 입력 필드 외에 category, comparison_quantity, comparison_unit, source,
 created_at, updated_at을 저장합니다. 가격과 수량은 소수 정밀도를 보존하는 문자열로 저장하고 계산 때 Decimal로 읽습니다.
-목록은 문서 ID 순서의 커서 페이징입니다. 날짜 정렬은 아직 지원하지 않습니다.
+목록은 가격 자료 연월과 등록 시각 내림차순 커서 페이징입니다.
 
 `conversations/{uuid}` 문서에는 owner_id, title, created_at, updated_at, messages를 저장합니다.
 메시지는 role, content, created_at을 가집니다. 챗봇 응답이 성공한 뒤 질문과 답변을 Firestore에 씁니다.

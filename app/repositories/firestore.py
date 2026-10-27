@@ -13,6 +13,7 @@ from google.oauth2 import service_account
 
 from app.errors import (ConversationNotFound, RecordConflict, RecordNotFound,
                         StoreUnavailable, StoreQuotaExceeded, TooManyRecords)
+from app.pagination import decode_price_cursor, encode_price_cursor
 
 log = logging.getLogger(__name__)
 
@@ -96,19 +97,21 @@ class FirestoreRepository:
     def list_page(self, limit, cursor=None, item_name=None):
         # Firestore orders the entire matching result before applying the limit.
         query = (self.collection.order_by("year_month", direction=firestore.Query.DESCENDING)
+                 .order_by("created_at", direction=firestore.Query.DESCENDING)
                  .order_by("__name__", direction=firestore.Query.DESCENDING))
         if item_name:
             query = query.where(filter=FieldFilter("item_name", "==", item_name))
         if cursor:
-            year_month, record_id = cursor.split(":", 1)
+            year_month, created_at, record_id = decode_price_cursor(cursor)
             query = query.start_after({"year_month": year_month,
+                                       "created_at": created_at,
                                        "__name__": self.collection.document(record_id)})
         try:
             rows = [self.decode(doc) for doc in query.limit(limit + 1).stream(timeout=10, retry=None)]
         except GoogleAPICallError as exc:
             raise unavailable("list page", exc) from exc
         more = len(rows) > limit
-        next_cursor = f"{rows[limit - 1]['year_month']}:{rows[limit - 1]['id']}" if more else None
+        next_cursor = encode_price_cursor(rows[limit - 1]) if more else None
         return {"items": rows[:limit], "next_cursor": next_cursor, "has_more": more}
 
     def analysis_records(self, first_month, last_month, max_records):
