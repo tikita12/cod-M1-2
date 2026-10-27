@@ -32,7 +32,7 @@ FastAPI가 `/`에서 같은 파일을 제공하므로 로컬에서는 API 주소
 키를 화면 소스 코드에 넣지 않습니다. 이 값은 서버 설정 파일에서 직접 확인할 수 있습니다.
 화면에서 외부 데이터를 표시할 때는 textContent를 사용합니다.
 챗봇을 켜려면 서버 `.env`의 `OPENAI_API_KEY`가 필요합니다.
-질문과 대화 기록은 답변 생성을 위해 OpenAI API로 전달되고, 답변을 받으면 Firestore에 저장됩니다.
+질문과 대화 기록은 답변 생성을 위해 기관 AI API(`https://copa.codyssey.kr/v1/chat/completions`, 모델 `gpt-5-mini`)로 전달되고, 답변을 받으면 Firestore에 저장됩니다.
 키가 없으면 챗봇 화면에 설정 필요 안내가 나타납니다.
 
 ## 저장된 분석 미리보기
@@ -42,19 +42,23 @@ FastAPI가 `/`에서 같은 파일을 제공하므로 로컬에서는 API 주소
 실제 서버 연결 실패 시 자동으로 샘플 결과로 대체하지 않고, 사용자가 미리보기를 선택하도록 합니다.
 샘플은 `frontend/sample/seasonal_rankings.json`이고, 원본 분석을 갱신하면 이 파일도 갱신해야 합니다.
 
-## Vercel 배포 준비
+## Vercel 배포 완료
 
-이번 단계에서는 배포하지 않았습니다.
-Vercel 프로젝트의 Root Directory를 `frontend`로 설정하고 정적 사이트로 배포할 수 있게 구성했습니다.
-프론트엔드 배포 전에 `frontend/config.js`의 `apiBase`에 실제 Render 서버 HTTPS 주소를 넣어야 합니다.
-빈 값은 같은 도메인의 API를 요청하므로 Vercel 단독 배포 상태에서는 연결되지 않습니다.
-Render의 `ALLOWED_ORIGINS`에는 실제 Vercel 배포 주소를 추가하고 서버를 재시작해야 합니다.
+프론트엔드 주소: **https://cod-m1-2-frontend.vercel.app**
+
+백엔드 주소: https://geogyfood.onrender.com
+
+Vercel은 `frontend` 디렉터리의 정적 파일을 제공합니다.
+`frontend/config.js`의 `apiBase`는 빈 값으로 유지하며, 브라우저는 같은 도메인의 `/api/...`로 요청합니다.
+`frontend/vercel.json`의 rewrite가 `/api/:path*`를 `https://geogyfood.onrender.com/api/:path*`로 전달하므로 Render 주소를 `apiBase`에 직접 넣을 필요가 없습니다.
+프론트에서 Render를 직접 호출하는 방식으로 바꿀 때는 Render의 `ALLOWED_ORIGINS` 설정도 확인해야 합니다.
 Firebase 인증 파일과 `.env`는 Vercel 프론트엔드에 올리지 않습니다.
 
-OpenAI API를 연결하면 응답을 생성할 때 계정 API 사용량이 발생할 수 있습니다.
+AI 응답을 생성하면 기관 API 사용량이 발생할 수 있습니다.
 Vercel에 프론트엔드를 배포할 때 API 키를 `config.js`나 프론트엔드 환경 변수에 두지 않습니다.
 
 ## 검증
 
 JavaScript 문법 검사, FastAPI 정적 파일 응답, API 회귀 테스트를 수행했습니다.
-현재 연결된 브라우저가 없어 실제 화면 캡처와 브라우저 클릭/모바일 너비 검증은 수행하지 못했습니다.
+2026-10-27에는 Vercel 경유 재료 목록 64개, 프론트·백엔드 요약 200 응답(가격 기록 14,131건·11월 후보 33개), 배포된 JS·CSS와 로컬 파일 일치를 확인했습니다.
+모바일 채팅 고정 패널은 로컬 화면에서 확인했으며, 실제 모바일 기기 전체 동작을 검증한 것은 아닙니다.
