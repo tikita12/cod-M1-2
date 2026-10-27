@@ -118,7 +118,7 @@ class SummaryMetadata(BaseModel):
     source_start: str | None
     source_end: str | None
     generated_at: datetime
-    storage: Literal["firestore"] = "firestore"
+    storage: Literal["firestore", "firestore-cache"] = "firestore"
     freshness: str = "매 요청마다 Firestore에서 조회하여 계산"
 
 
