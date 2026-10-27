@@ -7,6 +7,8 @@ from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 from google.api_core.exceptions import AlreadyExists, NotFound, ServiceUnavailable, ResourceExhausted
+from google.auth.credentials import AnonymousCredentials
+from google.cloud import firestore
 
 from app.config import Settings
 from app.errors import RecordConflict, RecordNotFound, StoreUnavailable, TooManyRecords
@@ -41,11 +43,15 @@ class TestStore:
         del self.rows[key]
 
     def list_page(self, limit, cursor=None, item_name=None):
-        rows = [self.get(key) for key in sorted(self.rows) if (not cursor or key > cursor)
-                and (not item_name or self.rows[key]['item_name'] == item_name)]
+        rows = sorted((self.get(key) for key in self.rows
+                       if not item_name or self.rows[key]['item_name'] == item_name),
+                      key=lambda row: (row['year_month'], row['id']), reverse=True)
+        if cursor:
+            boundary = tuple(cursor.split(':', 1))
+            rows = [row for row in rows if (row['year_month'], row['id']) < boundary]
         more = len(rows) > limit
         return {'items': rows[:limit], 'has_more': more,
-                'next_cursor': rows[limit - 1]['id'] if more else None}
+                'next_cursor': f"{rows[limit - 1]['year_month']}:{rows[limit - 1]['id']}" if more else None}
 
     def analysis_records(self, first_month, last_month, max_records):
         rows = [self.get(key) for key in sorted(self.rows) if first_month <= self.rows[key]['year_month'] <= last_month]
@@ -146,7 +152,47 @@ class PriceApiTests(unittest.TestCase):
         self.assertTrue(first['has_more'])
         self.assertFalse(second['has_more'])
         self.assertEqual(len({r['id'] for r in first['items']+second['items']}), 3)
+        self.assertEqual([r['year_month'] for r in first['items']+second['items']],
+                         ['2024-11', '2024-10', '2024-09'])
         self.assertEqual(self.client.get('/api/data?limit=101').status_code, 422)
+
+    def test_latest_month_order_across_pages_and_search(self):
+        # Insert older data last so creation order cannot satisfy the assertions.
+        created = [self.add(price(period, quantity=quantity, item_name=item))
+                   for period, quantity, item in [
+                       ('2024-11', 1, '감자'), ('2024-12', 1, '감자'),
+                       ('2024-12', 2, '감자'), ('2024-12', 3, '감자'),
+                       ('2024-12', 1, '배추'), ('2023-01', 1, '감자')]]
+        for item_name in [None, '감자', '배추', '없는품목']:
+            with self.subTest(item_name=item_name):
+                params = {'limit': 2}
+                if item_name:
+                    params['item_name'] = item_name
+                actual = []
+                for _ in range(len(created) + 1):
+                    response = self.client.get('/api/data', params=params)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    page = response.json()
+                    actual.extend(page['items'])
+                    if not page['has_more']:
+                        self.assertIsNone(page['next_cursor'])
+                        break
+                    params['cursor'] = page['next_cursor']
+                else:
+                    self.fail('Pagination did not terminate')
+                expected = sorted((r for r in created if not item_name or r['item_name'] == item_name),
+                                  key=lambda r: (r['year_month'], r['id']), reverse=True)
+                self.assertEqual([r['id'] for r in actual], [r['id'] for r in expected])
+
+    def test_deleted_cursor_record_and_invalid_cursor(self):
+        for month in [9, 10, 11]:
+            self.add(price(f'2024-{month:02d}'))
+        first = self.client.get('/api/data?limit=1').json()
+        self.client.delete('/api/data/' + first['items'][0]['id'], headers=self.headers)
+        following = self.client.get('/api/data', params={'cursor': first['next_cursor']}).json()
+        self.assertEqual([r['year_month'] for r in following['items']], ['2024-10', '2024-09'])
+        for cursor in ['a' * 64, '2024-13:' + 'a' * 64, '2024-11:bad']:
+            self.assertEqual(self.client.get('/api/data', params={'cursor': cursor}).status_code, 422)
 
     def test_cors_and_swagger(self):
         response = self.client.options('/api/data', headers={'Origin': 'http://localhost:5173',
@@ -179,6 +225,37 @@ class PriceApiTests(unittest.TestCase):
 
 
 class FirestoreAdapterTests(unittest.TestCase):
+    def test_list_query_sorts_before_limit_and_uses_both_cursor_fields(self):
+        client = firestore.Client(project='offline-tests', credentials=AnonymousCredentials())
+        self.repo.collection = client.collection('data')
+        ids = ['c' * 64, 'b' * 64, 'a' * 64]
+        docs = [Mock(id=key, to_dict=Mock(return_value={'year_month': '2024-11'})) for key in ids]
+        queries = []
+
+        def stream(query, **kwargs):
+            queries.append(query._to_protobuf())
+            return iter(docs)
+
+        try:
+            with patch.object(firestore.Query, 'stream', stream):
+                for item_name in [None, '감자']:
+                    result = self.repo.list_page(2, '2024-12:' + 'd' * 64, item_name)
+                    query = queries[-1]
+                    self.assertEqual([(order.field.field_path, order.direction) for order in query.order_by],
+                                     [('year_month', 2), ('__name__', 2)])
+                    self.assertEqual(query.limit, 3)
+                    self.assertEqual(query.start_at.values[0].string_value, '2024-12')
+                    self.assertTrue(query.start_at.values[1].reference_value.endswith('/data/' + 'd' * 64))
+                    self.assertFalse(query.start_at.before)
+                    if item_name:
+                        self.assertEqual(query.where.field_filter.field.field_path, 'item_name')
+                        self.assertEqual(query.where.field_filter.value.string_value, item_name)
+                    self.assertEqual([row['id'] for row in result['items']], ids[:2])
+                    self.assertTrue(result['has_more'])
+                    self.assertEqual(result['next_cursor'], '2024-11:' + ids[1])
+        finally:
+            client.close()
+
     def test_quota_error_is_distinct_and_does_not_expose_sdk_details(self):
         store = TestStore()
         store.analysis_records = Mock(side_effect=unavailable('analysis query', ResourceExhausted('private diagnostic')))

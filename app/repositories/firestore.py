@@ -94,17 +94,22 @@ class FirestoreRepository:
             raise unavailable("delete", exc) from exc
 
     def list_page(self, limit, cursor=None, item_name=None):
-        query = self.collection.order_by("__name__")
+        # Firestore orders the entire matching result before applying the limit.
+        query = (self.collection.order_by("year_month", direction=firestore.Query.DESCENDING)
+                 .order_by("__name__", direction=firestore.Query.DESCENDING))
         if item_name:
             query = query.where(filter=FieldFilter("item_name", "==", item_name))
         if cursor:
-            query = query.start_after({"__name__": self.collection.document(cursor)})
+            year_month, record_id = cursor.split(":", 1)
+            query = query.start_after({"year_month": year_month,
+                                       "__name__": self.collection.document(record_id)})
         try:
             rows = [self.decode(doc) for doc in query.limit(limit + 1).stream(timeout=10, retry=None)]
         except GoogleAPICallError as exc:
             raise unavailable("list page", exc) from exc
         more = len(rows) > limit
-        return {"items": rows[:limit], "next_cursor": rows[limit - 1]["id"] if more else None, "has_more": more}
+        next_cursor = f"{rows[limit - 1]['year_month']}:{rows[limit - 1]['id']}" if more else None
+        return {"items": rows[:limit], "next_cursor": next_cursor, "has_more": more}
 
     def analysis_records(self, first_month, last_month, max_records):
         query = (self.collection.where(filter=FieldFilter("year_month", ">=", first_month))

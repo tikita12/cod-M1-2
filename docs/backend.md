@@ -59,11 +59,28 @@ Swagger UI의 Authorize에 `.env`의 `ADMIN_API_KEY`를 넣으면 추가·수정
 | 메서드 | 경로 | 기능 |
 |---|---|---|
 | GET | `/api/data/catalog` | 농산물 분류 목록 |
-| GET | `/api/data` | 목록, `limit`·`cursor`·`item_name` 지원 |
+| GET | `/api/data` | 가격 자료 `year_month` 내림차순 목록, `limit`·`cursor`·`item_name` 지원 |
 | POST | `/api/data` | 월별 가격 추가 |
 | GET | `/api/data/{id}` | 한 건 조회 |
 | PATCH | `/api/data/{id}` | 가격·메모 수정 |
 | DELETE | `/api/data/{id}` | 삭제 |
+
+목록은 등록일(`created_at`)이 아닌 가격 자료의 연월(`year_month`) 내림차순입니다.
+같은 연월에서는 문서 ID 내림차순으로 순서를 고정합니다. Firestore에서 검색 조건에
+맞는 전체 결과를 정렬한 뒤 `limit + 1`건만 읽어 페이지와 다음 페이지 유무를 결정합니다.
+`item_name`은 기존처럼 품목명 정확히 일치 검색입니다.
+
+다음 요청에는 응답의 `next_cursor`를 그대로 전달하고 같은 검색 조건을 유지합니다.
+커서는 `YYYY-MM:문서ID` 형식으로 두 정렬 기준을 모두 포함하므로 같은 연월이 여러
+페이지에 걸쳐 있어도 이어서 조회할 수 있습니다. 커서의 문서가 삭제되어도 추가 조회 없이
+그 위치 다음부터 읽습니다. 검색 조건을 바꾸면 커서를 초기화합니다. 이전 ID 전용 커서는
+지원하지 않으므로 배포 후 열려 있던 관리 화면은 새로고침해야 합니다.
+
+품목 검색과 최신순 정렬에는 `firestore.indexes.json`에 정의한 복합 인덱스가 필요합니다.
+Firebase 콘솔의 Firestore 인덱스에서 컬렉션 `data`, 범위 `Collection`, 필드
+`item_name` 오름차순·`year_month` 내림차순·`__name__` 내림차순으로 생성하고
+인덱스가 준비된 후 배포 환경의 검색을 확인합니다. 일반 목록은 `year_month` 내림차순
+단일 필드 인덱스를 사용합니다. 코드 배포만으로 복합 인덱스가 생성되지는 않습니다.
 | GET | `/api/data/summary?month=11` | 월별 하락 경향 요약 |
 | GET | `/api/chat/status` | AI API 키 설정 여부 |
 | POST | `/api/chat` | 분석 요약을 반영한 답변과 대화 저장 |

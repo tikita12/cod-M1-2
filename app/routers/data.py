@@ -23,9 +23,9 @@ def summary(month: Annotated[int | None, Query(ge=1, le=12)] = None,
     return service.summary(selected_month, limit)
 
 
-@router.get("", response_model=PricePage, summary="가격 목록 조회")
+@router.get("", response_model=PricePage, summary="가격 자료 연월 최신순 목록 조회")
 def list_prices(limit: Annotated[int, Query(ge=1, le=100)] = 30,
-                cursor: Annotated[str | None, Query(pattern=r"^[0-9a-f]{64}$")] = None,
+                cursor: Annotated[str | None, Query(pattern=r"^[0-9]{4}-(0[1-9]|1[0-2]):[0-9a-f]{64}$")] = None,
                 item_name: Annotated[str | None, Query(max_length=60)] = None, store=Depends(repository)):
     return store.list_page(limit, cursor, item_name)
 

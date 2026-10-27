@@ -1,0 +1,14 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "data",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "item_name", "order": "ASCENDING" },
+        { "fieldPath": "year_month", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
