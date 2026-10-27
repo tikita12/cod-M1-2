@@ -54,10 +54,8 @@ class ChatTests(unittest.TestCase):
         self.assertIn('-24.6', body['messages'][0]['content'])
         self.assertEqual(body['messages'][1], {'role': 'user', 'content': 'No meat'})
         self.assertEqual(body['messages'][-1]['content'], self.payload.message)
-        self.assertNotIn('input', body)
-        self.assertNotIn('instructions', body)
+        self.assertEqual(set(body), {'model', 'messages'})
         self.prices.summary.assert_called_once_with(11, 8)
-        self.assertFalse(body['store'])
         self.repo.get_conversation.assert_called_once_with(self.payload.conversation_id, self.payload.owner_id)
         args = self.repo.append_conversation.call_args.args
         self.assertEqual(args[2]['role'], 'user')

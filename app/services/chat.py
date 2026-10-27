@@ -108,8 +108,7 @@ class ChatService:
                 response = client.post("https://copa.codyssey.kr/v1/chat/completions",
                     headers={"Authorization": "Bearer " + self.settings.openai_api_key,
                              "Content-Type": "application/json"},
-                    json={"model": self.settings.openai_model, "messages": messages,
-                          "max_completion_tokens": 2400, "reasoning_effort": "low", "store": False})
+                    json={"model": self.settings.openai_model, "messages": messages})
             if response.is_error:
                 log.warning("OpenAI request failed with HTTP %s error=%s", response.status_code,
                             _error_log_fields(response, self.settings.openai_api_key, messages))
