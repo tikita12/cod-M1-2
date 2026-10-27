@@ -9,7 +9,7 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.types import CommitResponse, BeginTransactionResponse
 
 from app.config import Settings
-from app.errors import RecordConflict, RecordNotFound, StoreQuotaExceeded, StoreTimeout
+from app.errors import RecordConflict, RecordNotFound, StoreQuotaExceeded, StoreTimeout, TooManyRecords
 from app.main import create_app
 from app.repositories.firestore import FirestoreRepository
 from app.schemas import PriceCreate, PriceUpdate
@@ -142,6 +142,38 @@ class AtomicPriceTests(unittest.TestCase):
             self.assertIsNone(client.app.state.price_service._analysis)
             persist.assert_not_called()
         self.rpc.commit.assert_not_called()
+
+    def test_analysis_paginates_without_duplicates_and_bounds_reads(self):
+        docs = [Mock(id=str(i), to_dict=Mock(return_value={'year_month': '2024-11'}))
+                for i in range(503)]
+        query = Mock()
+        query.where.return_value = query
+        query.order_by.return_value = query
+        query.limit.return_value = query
+        query.start_after.return_value = query
+        self.repo.collection = query
+        query.stream.side_effect = [iter(docs[:500]), iter(docs[500:])]
+        rows = self.repo.analysis_records('2014-12', '2024-12', 1000)
+        self.assertEqual([row['id'] for row in rows], [str(i) for i in range(503)])
+        query.start_after.assert_called_once_with(docs[499])
+        self.assertEqual([call.args[0] for call in query.limit.call_args_list], [500, 500])
+        query.limit.reset_mock()
+        query.stream.side_effect = [iter(docs[:500]), iter(docs[500:502])]
+        with self.assertRaises(TooManyRecords):
+            self.repo.analysis_records('2014-12', '2024-12', 501)
+        self.assertEqual([call.args[0] for call in query.limit.call_args_list], [500, 2])
+
+    def test_analysis_later_page_timeout_returns_no_partial_result(self):
+        query = Mock()
+        query.where.return_value = query
+        query.order_by.return_value = query
+        query.limit.return_value = query
+        query.start_after.return_value = query
+        self.repo.collection = query
+        query.stream.side_effect = [iter([self.snapshot] * 500), DeadlineExceeded('timeout')]
+        with self.assertRaises(StoreTimeout):
+            self.repo.analysis_records('2014-12', '2024-12', 1000)
+        self.assertEqual(query.stream.call_count, 2)
 
 
 if __name__ == '__main__':

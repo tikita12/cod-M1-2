@@ -139,9 +139,19 @@ class FirestoreRepository:
 
     def analysis_records(self, first_month, last_month, max_records):
         query = (self.collection.where(filter=FieldFilter("year_month", ">=", first_month))
-                 .where(filter=FieldFilter("year_month", "<=", last_month)).limit(max_records + 1))
+                 .where(filter=FieldFilter("year_month", "<=", last_month))
+                 .order_by("year_month").order_by("__name__"))
+        rows = []
         try:
-            rows = [self.decode(doc) for doc in query.stream(timeout=30, retry=QUERY_RETRY)]
+            # Bound each RPC instead of timing out one collection-wide stream.
+            # Snapshot cursors keep equal-month records distinct across pages.
+            while len(rows) <= max_records:
+                page_size = min(500, max_records + 1 - len(rows))
+                page = list(query.limit(page_size).stream(timeout=30, retry=QUERY_RETRY))
+                rows.extend(self.decode(doc) for doc in page)
+                if len(page) < page_size or len(rows) > max_records:
+                    break
+                query = query.start_after(page[-1])
         except GoogleAPICallError as exc:
             raise unavailable("analysis query", exc) from exc
         if len(rows) > max_records:
