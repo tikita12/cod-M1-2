@@ -6,6 +6,42 @@
 
 **Vercel 프론트엔드 배포 완료: https://cod-m1-2-frontend.vercel.app**
 
+## 실제 실행 화면과 검증 증빙
+
+2026-10-27 배포 사이트를 Chrome으로 직접 캡처했습니다. 미리보기·목업 화면이 아닙니다.
+이미지 외에도 자동 평가에서 읽을 수 있는 [실제 HTTP 응답·CRUD 로그·모바일 동작 기록](reports/deployment_evidence.md)을 제공합니다.
+
+| 확인 항목 | 실제 확인 결과 | 증빙 |
+| --- | --- | --- |
+| 공개 배포 접속 | Render `/health` 200, Vercel 화면에 가격 14,131건·11월 후보 33개 표시 | 아래 재료 탐색 캡처와 [접속 로그](reports/deployment_evidence.md#배포-접속과-swagger) |
+| Swagger | 공개 `/docs` 화면 로딩, `/openapi.json` 200 | 아래 Swagger 캡처와 OpenAPI 응답 발췌 |
+| Firestore 저장·조회 | POST 201 → PATCH 200 → GET 200 → DELETE 204 → GET 404 | [실제 CRUD 검증 기록](reports/deployment_evidence.md#실제-가격-crud-검증)과 아래 최신순 목록 캡처 |
+| 모바일 화면 | 390×844에서 탐색·채팅 열기·입력·닫기, 가로 넘침 없음 | 아래 모바일 캡처와 [동작 기록](reports/deployment_evidence.md#모바일-화면-검증) |
+
+### 재료 탐색 — 실제 배포 화면
+
+![Vercel 실제 화면: 2015–2024년 가격 14,131건, 11월 후보 33개와 재료 순위](docs/images/desktop-explore.png)
+
+1440×1000 화면. 오른쪽 메시지는 챗봇의 초기 안내이며 AI 답변 생성 증빙은 아닙니다.
+
+### 데이터 관리 — 실제 Firestore 목록
+
+![데이터 관리 화면: Firestore 가격 목록 30건 표시, 최신 연월 2024-12](docs/images/desktop-manage.png)
+
+인덱스 활성화 후 배포 사이트에서 목록이 정상 표시되는 화면입니다. 관리자 키는 입력하지 않았으며 비밀값은 포함하지 않았습니다.
+
+### Swagger — 배포 백엔드 API 문서
+
+![Render Swagger 화면: 상태 확인, 가격 조회·등록·수정·삭제 API](docs/images/swagger.png)
+
+접속 주소: https://geogyfood.onrender.com/docs. 실제 OpenAPI 응답의 버전은 `3.1.0`, 앱 버전은 `0.1.0`입니다.
+
+### 모바일 — 재료 탐색과 채팅 패널
+
+<img src="docs/images/mobile-explore.png" alt="390px 모바일 폭의 재료 탐색 화면: 월 선택과 재료 순위" width="320"> <img src="docs/images/mobile-chat.png" alt="390px 모바일 폭의 채팅 패널: 질문 입력란과 전송·닫기 버튼" width="320">
+
+Chrome의 390×844 CSS 픽셀 뷰포트로 확인했습니다. 실물 휴대전화 테스트와 구분합니다. 입력은 확인하되 비용 절감을 위해 메시지는 전송하지 않았습니다.
+
 ## 현재 진행 상황
 
 2026-10-27 기준입니다. 아래의 실제 API 검증, 사용자 확인, 로컬 테스트 결과를 구분해 기록합니다.
@@ -23,7 +59,7 @@
 | 분석 캐시 | 가격 변경과 revision 갱신을 원자적으로 처리. 중복 등록 실패 시 revision 유지 확인. 실제 Firestore 자료로 revision 11 캐시 저장 완료 |
 | 자동 검증 | Python 오프라인 테스트 39개 통과. JavaScript 구문 검사는 이전 작업에서 통과 |
 | 조회 안정성 | 분석 원본을 500건씩 커서 조회하도록 수정. 시간 초과는 `503 / firestore_timeout`, 할당량 초과는 `503 / firestore_quota_exceeded`로 구분 |
-| 화면 개선 | 데이터 목록 최신 연월순 정렬, 모바일 채팅 고정 패널 적용·로컬 확인. 배포된 JS·CSS와 로컬 파일 일치 확인 |
+| 화면 개선 | 데이터 목록 최신 연월순 정렬·인덱스 활성화 후 실제 목록 확인. 모바일 채팅 고정 패널을 배포 사이트의 390×844 뷰포트에서 열기·입력·닫기 검증 및 캡처 |
 | 배포 | Vercel 프론트·Render 백엔드 연결 확인. 프론트 재료 목록 64개, 양쪽 요약 API 200 응답 확인 |
 
 모의 테스트 통과와 실제 클라우드 연동 성공은 구분합니다. 인증키와 서비스 계정 비밀값은 이 문서에 기록하지 않습니다.
