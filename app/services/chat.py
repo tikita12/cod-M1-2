@@ -64,30 +64,29 @@ class ChatService:
             json.dumps(facts, ensure_ascii=False, separators=(",", ":")) +
             "\n</price_context>"
         )
-        inputs = [{"role": entry["role"], "content": entry["content"]} for entry in history
-                  if entry.get("role") in {"user", "assistant"} and isinstance(entry.get("content"), str)]
-        inputs.append({"role": "user", "content": payload.message})
+        messages = [{"role": "system", "content": instructions}]
+        messages.extend({"role": entry["role"], "content": entry["content"]} for entry in history
+                        if entry.get("role") in {"user", "assistant"} and isinstance(entry.get("content"), str))
+        messages.append({"role": "user", "content": payload.message})
         try:
             with httpx.Client(timeout=httpx.Timeout(45, connect=8)) as client:
-                response = client.post("https://api.openai.com/v1/responses",
+                response = client.post("https://copa.codyssey.kr/v1/chat/completions",
                     headers={"Authorization": "Bearer " + self.settings.openai_api_key,
                              "Content-Type": "application/json"},
-                    json={"model": self.settings.openai_model, "instructions": instructions,
-                          "input": inputs, "max_output_tokens": 2400, "reasoning": {"effort": "low"}, "store": False})
+                    json={"model": self.settings.openai_model, "messages": messages,
+                          "max_completion_tokens": 2400, "reasoning_effort": "low", "store": False})
             if response.is_error:
                 log.warning("OpenAI request failed with HTTP %s", response.status_code)
                 raise AIUnavailable("AI 서비스 요청에 실패했습니다. API 키와 모델 설정을 확인하세요")
             result = response.json()
-            if result.get("status") != "completed":
+            choice = result["choices"][0]
+            if choice.get("finish_reason") != "stop":
                 raise AIUnavailable("AI 답변이 완성되지 않았습니다. 질문을 짧게 바꿔 다시 시도해 주세요.")
-            answer = result.get("output_text")
-            if not answer:
-                answer = "\n".join(part.get("text", "") for item in result.get("output", [])
-                                    for part in (item.get("content") or []) if part.get("type") == "output_text")
-            answer = answer.strip()
-            if not answer:
+            answer = choice["message"]["content"]
+            if not isinstance(answer, str) or not answer.strip():
                 raise AIUnavailable("AI 답변을 받지 못했습니다. 다시 시도해 주세요")
-        except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
+            answer = answer.strip()
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError, IndexError) as exc:
             log.warning("OpenAI request failed: %s", type(exc).__name__)
             raise AIUnavailable("AI 서비스에 연결할 수 없습니다. 잠시 후 다시 시도하세요") from exc
 

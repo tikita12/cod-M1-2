@@ -12,15 +12,26 @@
 | 선별 자료 | 농산물 64개 품목, 36,169행 중 분석 기간에 해당하는 자료 사용 |
 | Firestore 초기 적재 | 사용자가 실제 연결 및 가격 기록 14,131건 적재 확인 |
 | 요약 API | 실제 Firestore 기반 분석 응답 확인 |
-| 웹 화면 | 아이콘 목록, 월 선택, 검색·정렬, 가격 비교 탭, CRUD, 챗봇 구현 |
+| 웹 화면 | 아이콘 목록, 월 선택, 검색·정렬, 가격 비교 탭, CRUD, 챗봇 구현. 사용자가 실제 화면에서 가격 기록 14,131건, 후보 33개, 분석 기간 2015–2024와 재료 순위 표시 확인 |
 | AI·대화 | 요약 주입, 저장·목록·불러오기 코드 구현 및 일부 모의 테스트 |
 | OpenAI 설정 | 사용자 키 설정 확인. 실제 요청 성공을 뜻하지 않음 |
 | 자동 검증 | 기존 코드 기준 Python 테스트 24개 통과, JavaScript 구문 검사 통과. 영구 캐시 변경은 아직 별도 검증 전 |
-| 현재 제약 | 실제 챗봇 요청에서 Firestore 할당량/요청 한도 초과 확인 |
-| 남은 검증 | 실제 AI 응답부터 Firestore 대화 저장·복원까지 전체 연동, 실제 브라우저·모바일 화면 |
-| 배포 | Vercel 프론트엔드 / Render FastAPI 배포 예정, 아직 미배포 |
+| 현재 제약 | 챗봇은 AI 요청 오류로 아직 미해결. 이전 Firestore 할당량/요청 한도 초과 이력이 있으며 현재 오류 원인은 추가 확인 필요 |
+| 남은 검증 | 배포 환경의 실제 CRUD, AI 응답부터 Firestore 대화 저장·목록·복원까지 전체 연동, 모바일 화면 |
+| 배포 | Render FastAPI 배포 완료: https://geogyfood.onrender.com. Vercel 프론트엔드 배포는 남아 있음 |
 
 모의 테스트 통과와 실제 클라우드 연동 성공은 구분합니다. 인증키와 서비스 계정 비밀값은 이 문서에 기록하지 않습니다.
+
+## Render 배포 주소
+
+| 주소 | 내용 |
+| --- | --- |
+| [https://geogyfood.onrender.com](https://geogyfood.onrender.com) | 배포된 실제 앱 |
+| [/docs](https://geogyfood.onrender.com/docs) | Swagger API 문서·요청 실행 |
+| [/health/ready](https://geogyfood.onrender.com/health/ready) | 실제 Firestore 연결 확인: 읽기 요청 발생 |
+| [/api/data/summary?month=11](https://geogyfood.onrender.com/api/data/summary?month=11) | 11월 계절적 하락 경향 요약 |
+
+위 화면 확인 결과는 사용자 확인 기준입니다. 링크 제공은 각 엔드포인트와 전체 기능의 검증 완료를 뜻하지 않으며, 챗봇 오류 해결과 CRUD·대화 복원 검증은 남아 있습니다.
 
 ## 로컬 실행
 
@@ -260,11 +271,11 @@ node --check frontend/app.js
 
 ## 다음 작업과 참고 자료
 
-1. Firestore 사용량 확인 및 할당량 복구 후 실제 CRUD·AI 응답·대화 저장·목록·복원 검증.
+1. 챗봇 AI 요청 오류 원인 확인 및 해결. Firestore 사용량·할당량 상태도 확인하고 실제 AI 응답·대화 저장·목록·복원 검증.
 2. 분석 영속 캐시, 공개 서비스용 사용자 인증·호출 제한 보완.
 3. 실제 모바일 브라우저에서 줄바꿈·패널·탭·닫기 확인.
-4. Vercel 화면·Render API 배포, `frontend/config.js`의 API 주소 및 서버 허용 오리진 설정.
-5. 배포 URL에서 Swagger·요약 반영·CRUD·대화 복원 평가 항목 확인.
+4. Vercel 프론트엔드 배포, `frontend/config.js`에 배포된 Render API 주소 및 서버에 실제 Vercel 허용 오리진 설정.
+5. 배포 URL에서 Swagger·준비 상태·요약 API 응답과 실제 CRUD·대화 복원 평가 항목 확인. 가격 기록·후보 수·분석 기간·재료 순위 표시는 사용자 확인 완료.
 
 - [데이터 정리 설명](data/README.md)
 - [계절성 분석 결과와 한계](reports/seasonality.md)
