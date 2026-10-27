@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from app.config import ROOT, Settings
 from app.dependencies import repository
 from app.errors import (AIUnavailable, ConversationNotFound, RecordConflict,
-                        RecordNotFound, StoreUnavailable, StoreQuotaExceeded, TooManyRecords)
+                        RecordNotFound, StoreUnavailable, StoreQuotaExceeded, StoreTimeout, TooManyRecords)
 from app.routers.chat import router as chat_router
 from app.routers.data import router
 
@@ -39,6 +39,12 @@ def create_app(settings=None, store=None):
         return JSONResponse(status_code=503, content={
             "code": "firestore_quota_exceeded",
             "detail": "Firestore 할당량 또는 요청 한도를 초과했습니다. Firebase 콘솔에서 사용량을 확인하세요. 가격 조회나 대화 저장이 제한되어 챗봇 요청을 완료하지 못했습니다. OpenAI 키를 바꿀 필요는 없습니다."})
+
+    @app.exception_handler(StoreTimeout)
+    async def timeout(request, exc):
+        return JSONResponse(status_code=503, content={
+            "code": "firestore_timeout",
+            "detail": "Firestore 요청 시간이 초과되었습니다. 잠시 후 다시 시도하세요."})
 
     @app.exception_handler(RecordConflict)
     async def conflict(request, exc):

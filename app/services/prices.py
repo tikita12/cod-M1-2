@@ -45,13 +45,11 @@ class PriceService:
 
     def create(self, payload):
         record_id, data = document_for_price(payload)
-        self.repository.mark_analysis_stale()
         created = self.repository.create(record_id, data)
         self.invalidate_analysis()
         return created
 
     def update(self, record_id, payload):
-        self.repository.mark_analysis_stale()
         updated = self.repository.update(record_id, {
             "average_price": str(payload.average_price), "note": payload.note,
             "updated_at": datetime.now(timezone.utc),
@@ -60,7 +58,6 @@ class PriceService:
         return updated
 
     def delete(self, record_id):
-        self.repository.mark_analysis_stale()
         self.repository.delete(record_id)
         self.invalidate_analysis()
 

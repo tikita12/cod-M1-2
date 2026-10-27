@@ -28,6 +28,7 @@ class TestStore:
         if key in self.rows:
             raise RecordConflict()
         self.rows[key] = {**copy.deepcopy(data), 'id': key}
+        self.mark_analysis_stale()
         return self.get(key)
 
     def get(self, key):
@@ -38,11 +39,13 @@ class TestStore:
     def update(self, key, changes):
         self.get(key)
         self.rows[key].update(changes)
+        self.mark_analysis_stale()
         return self.get(key)
 
     def delete(self, key):
         self.get(key)
         del self.rows[key]
+        self.mark_analysis_stale()
 
     def list_page(self, limit, cursor=None, item_name=None):
         rows = sorted((self.get(key) for key in self.rows
@@ -280,19 +283,21 @@ class FirestoreAdapterTests(unittest.TestCase):
     def setUp(self):
         self.repo = object.__new__(FirestoreRepository)
         self.repo.collection = Mock()
+        self.repo.client = Mock()
+        self.repo.analysis_cache = Mock()
 
     def test_create_translates_duplicate_and_connection_failures(self):
-        doc = self.repo.collection.document.return_value
-        doc.create.side_effect = AlreadyExists('duplicate')
+        commit = self.repo.client.batch.return_value.commit
+        commit.side_effect = AlreadyExists('duplicate')
         with self.assertRaises(RecordConflict):
             self.repo.create('x', {})
-        doc.create.side_effect = ServiceUnavailable('offline')
+        commit.side_effect = ServiceUnavailable('offline')
         with self.assertRaises(StoreUnavailable):
             self.repo.create('x', {})
 
     def test_update_does_not_upsert_missing_record(self):
-        self.repo.collection.document.return_value.update.side_effect = NotFound('missing')
-        with self.assertRaises(RecordNotFound):
+        self.repo.collection.document.return_value.get.side_effect = NotFound('missing')
+        with patch.object(firestore, 'transactional', lambda fn: fn), self.assertRaises(RecordNotFound):
             self.repo.update('x', {'average_price': '20'})
 
     def test_empty_emulator_setting_uses_cloud_endpoint(self):

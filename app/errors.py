@@ -6,6 +6,10 @@ class StoreQuotaExceeded(StoreUnavailable):
     pass
 
 
+class StoreTimeout(StoreUnavailable):
+    pass
+
+
 class RecordConflict(Exception):
     pass
 

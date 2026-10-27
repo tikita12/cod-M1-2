@@ -57,9 +57,8 @@ def main():
         if (created + existing) % 100 == 0:
             print(json.dumps({"created": created, "existing_skipped": existing}), flush=True)
     print(json.dumps({"created": created, "existing_skipped": existing}))
-    if created:
-        # One revision write per import job, never one write per CSV row.
-        store.mark_analysis_stale()
+    # Each successful create atomically advances the analysis revision, including
+    # when an import stops midway. No separate invalidation write is needed.
     if args.refresh_analysis_cache:
         from app.services.prices import PriceService
         service = PriceService(store, Settings.from_env())

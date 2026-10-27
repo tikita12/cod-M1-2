@@ -5,17 +5,23 @@ import gzip
 import json
 
 import google.auth
-from google.api_core.exceptions import AlreadyExists, GoogleAPICallError, NotFound, ResourceExhausted, TooManyRequests
+from google.api_core.exceptions import AlreadyExists, DeadlineExceeded, GoogleAPICallError, NotFound, ResourceExhausted, TooManyRequests
+from google.api_core.retry import Retry
 from google.auth.credentials import AnonymousCredentials
 from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 from google.oauth2 import service_account
 
 from app.errors import (ConversationNotFound, RecordConflict, RecordNotFound,
-                        StoreUnavailable, StoreQuotaExceeded, TooManyRecords)
+                        StoreUnavailable, StoreQuotaExceeded, StoreTimeout, TooManyRecords)
 from app.pagination import decode_price_cursor, encode_price_cursor
 
 log = logging.getLogger(__name__)
+
+# Query.stream inspects retry._predicate even when retry=None is supplied.
+# Explicitly disable retries: restarting a large scan can consume the remaining
+# quota, and the SDK's stream-resume loop does not enforce Retry's time budget.
+QUERY_RETRY = Retry(predicate=lambda exc: False)
 
 
 def unavailable(operation, exc):
@@ -25,6 +31,8 @@ def unavailable(operation, exc):
     log.warning("Firestore %s failed: %s %s", operation, status or type(exc).__name__, str(exc)[:500])
     if isinstance(exc, (ResourceExhausted, TooManyRequests)):
         return StoreQuotaExceeded("Firestore quota exceeded")
+    if isinstance(exc, DeadlineExceeded):
+        return StoreTimeout("Firestore operation timed out")
     return StoreUnavailable("Firestore operation failed: " + operation)
 
 
@@ -63,7 +71,10 @@ class FirestoreRepository:
 
     def create(self, record_id, data):
         try:
-            self.collection.document(record_id).create(data, timeout=10, retry=None)
+            batch = self.client.batch()
+            batch.create(self.collection.document(record_id), data)
+            self.mark_analysis_stale(batch)
+            batch.commit(timeout=10, retry=None)
             return {**data, "id": record_id}
         except AlreadyExists as exc:
             raise RecordConflict() from exc
@@ -71,9 +82,20 @@ class FirestoreRepository:
             raise unavailable("create", exc) from exc
 
     def update(self, record_id, changes):
+        ref = self.collection.document(record_id)
+
+        @firestore.transactional
+        def modify(transaction):
+            snapshot = ref.get(transaction=transaction, timeout=10, retry=None)
+            if not snapshot.exists:
+                raise RecordNotFound()
+            transaction.update(ref, changes)
+            self.mark_analysis_stale(transaction)
+            # Return the committed snapshot without a fallible post-commit read.
+            return {**self.decode(snapshot), **changes}
+
         try:
-            self.collection.document(record_id).update(changes, timeout=10, retry=None)
-            return self.get(record_id)
+            return modify(self.client.transaction())
         except NotFound as exc:
             raise RecordNotFound() from exc
         except GoogleAPICallError as exc:
@@ -88,6 +110,7 @@ class FirestoreRepository:
             if not snapshot.exists:
                 raise RecordNotFound()
             transaction.delete(ref)
+            self.mark_analysis_stale(transaction)
 
         try:
             remove(self.client.transaction())
@@ -107,7 +130,7 @@ class FirestoreRepository:
                                        "created_at": created_at,
                                        "__name__": self.collection.document(record_id)})
         try:
-            rows = [self.decode(doc) for doc in query.limit(limit + 1).stream(timeout=10, retry=None)]
+            rows = [self.decode(doc) for doc in query.limit(limit + 1).stream(timeout=10, retry=QUERY_RETRY)]
         except GoogleAPICallError as exc:
             raise unavailable("list page", exc) from exc
         more = len(rows) > limit
@@ -118,7 +141,7 @@ class FirestoreRepository:
         query = (self.collection.where(filter=FieldFilter("year_month", ">=", first_month))
                  .where(filter=FieldFilter("year_month", "<=", last_month)).limit(max_records + 1))
         try:
-            rows = [self.decode(doc) for doc in query.stream(timeout=30, retry=None)]
+            rows = [self.decode(doc) for doc in query.stream(timeout=30, retry=QUERY_RETRY)]
         except GoogleAPICallError as exc:
             raise unavailable("analysis query", exc) from exc
         if len(rows) > max_records:
@@ -162,15 +185,14 @@ class FirestoreRepository:
         except GoogleAPICallError as exc:
             raise unavailable('analysis cache write', exc) from exc
 
-    def mark_analysis_stale(self):
-        try:
-            self.analysis_cache.document('revision').set({'revision': firestore.Increment(1)}, merge=True)
-        except GoogleAPICallError as exc:
-            raise unavailable('analysis cache invalidate', exc) from exc
+    def mark_analysis_stale(self, batch):
+        """Stage the revision increment in the price mutation's atomic commit."""
+        batch.set(self.analysis_cache.document('revision'),
+                  {'revision': firestore.Increment(1)}, merge=True)
 
     def probe(self):
         try:
-            list(self.collection.limit(1).stream(timeout=5, retry=None))
+            list(self.collection.limit(1).stream(timeout=5, retry=QUERY_RETRY))
         except GoogleAPICallError as exc:
             raise unavailable("health probe", exc) from exc
 
@@ -186,7 +208,7 @@ class FirestoreRepository:
     def list_conversations(self, owner_id, limit=30):
         query = self.conversations.where(filter=FieldFilter("owner_id", "==", owner_id)).limit(limit)
         try:
-            return [self.decode(doc) for doc in query.stream(timeout=10, retry=None)]
+            return [self.decode(doc) for doc in query.stream(timeout=10, retry=QUERY_RETRY)]
         except GoogleAPICallError as exc:
             raise unavailable("conversation list", exc) from exc
 
